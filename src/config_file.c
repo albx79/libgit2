@@ -779,48 +779,14 @@ static int config_readonly_open(git_config_backend *cfg, git_config_level_t leve
 	diskfile_readonly_backend *b = (diskfile_readonly_backend *) cfg;
 	diskfile_backend *src = b->snapshot_from;
 	refcounted_strmap *src_map;
-	git_strmap *src_values, *values;
-	git_strmap_iter i;
-	cvar_t *src_var;
-	int error;
 
 	/* We're just copying data, don't care about the level */
 	GIT_UNUSED(level);
 
-	b->header.values = refcounted_strmap_alloc();
-	GITERR_CHECK_ALLOC(b->header.values);
-
 	src_map = refcounted_strmap_take(&src->header);
-	src_values = src->header.values->values;
-	values = b->header.values->values;
+	b->header.values = src_map;
 
-	i = git_strmap_begin(src_values);
-	while ((error = git_strmap_next((void **) &src_var, &i, src_values)) == 0) {
-		do {
-			git_config_entry *entry;
-			cvar_t *var;
-
-			var = git__calloc(1, sizeof(cvar_t));
-			GITERR_CHECK_ALLOC(var);
-
-			if (config_entry_dup(&entry, src_var->entry) < 0) {
-				refcounted_strmap_free(b->header.values);
-				refcounted_strmap_free(src_map);
-				return -1;
-			}
-
-			var->entry = entry;
-
-			error = append_entry(values, var);
-			src_var = CVAR_LIST_NEXT(src_var);
-		} while (src_var != NULL && error == 0);
-	}
-
-	if (error == GIT_ITEROVER)
-		error = 0;
-
-	refcounted_strmap_free(src_map);
-	return error;
+	return 0;
 }
 
 int git_config_file__snapshot(git_config_backend **out, diskfile_backend *in)
