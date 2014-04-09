@@ -46,6 +46,9 @@ int git_commit_create_from_callback(
 	git_commit_parent_callback parent_cb,
 	void *parent_payload)
 {
+	git_reference *ref = NULL;
+	int error = 0, matched_parent = 0;
+	const git_oid *current_id = NULL;
 	git_buf commit = GIT_BUF_INIT;
 	size_t i = 0;
 	git_odb *odb;
@@ -53,10 +56,31 @@ int git_commit_create_from_callback(
 
 	assert(id && repo && tree && parent_cb);
 
+	if (update_ref) {
+		error = git_reference_lookup_resolved(&ref, repo, update_ref, 10);
+		if (error < 0 && error != GIT_ENOTFOUND)
+			return error;
+	}
+
+
+	if (ref)
+		current_id = git_reference_target(ref);
+
 	git_oid__writebuf(&commit, "tree ", tree);
 
-	while ((parent = parent_cb(i++, parent_payload)) != NULL)
+	while ((parent = parent_cb(i, parent_payload)) != NULL) {
 		git_oid__writebuf(&commit, "parent ", parent);
+		if (i == 0 && current_id && git_oid_equal(current_id, parent))
+			matched_parent = 1;
+		i++;
+	}
+
+	if (ref && !matched_parent) {
+		git_reference_free(ref);
+		git_buf_free(&commit);
+		giterr_set(GITERR_OBJECT, "failed to create commit: current tip is not the first parent");
+		return GIT_EMODIFIED;
+	}
 
 	git_signature__writebuf(&commit, "author ", author);
 	git_signature__writebuf(&commit, "committer ", committer);
@@ -78,13 +102,16 @@ int git_commit_create_from_callback(
 	git_buf_free(&commit);
 
 	if (update_ref != NULL) {
+		git_reference *ref2 = NULL;
 		int error;
 		git_commit *c;
 		const char *shortmsg;
 		git_buf reflog_msg = GIT_BUF_INIT;
 
-		if (git_commit_lookup(&c, repo, id) < 0)
-			goto on_error;
+		if ((error = git_commit_lookup(&c, repo, id)) < 0) {
+			git_reference_free(ref);
+			return error;
+		}
 
 		shortmsg = git_commit_summary(c);
 		git_buf_printf(&reflog_msg, "commit%s: %s",
@@ -92,10 +119,15 @@ int git_commit_create_from_callback(
 				shortmsg);
 		git_commit_free(c);
 
-		error = git_reference__update_terminal(repo, update_ref, id,
-				committer, git_buf_cstr(&reflog_msg));
-
+		if (ref) {
+			error = git_reference_set_target(&ref2, ref, id, committer, git_buf_cstr(&reflog_msg));
+			git_reference_free(ref2);
+			git_reference_free(ref);
+		} else {
+			error = git_reference__update_terminal(repo, update_ref, id, committer, git_buf_cstr(&reflog_msg));
+		}
 		git_buf_free(&reflog_msg);
+
 		return error;
 	}
 
